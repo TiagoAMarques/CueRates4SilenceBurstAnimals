@@ -1,0 +1,418 @@
+---
+title: "Estimating cue rates for animals with silence-bout sound patterns"
+subtitle: "Supplementary material"
+author: "Tiago A. Marques, Sónia Coelho, Ana I. Leal"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+  word_document:
+    toc: true
+  pdf_document:
+    toc: true
+csl: C:\\Users\\tam2\\Dropbox\\ctr\\mee.csl
+bibliography: C:\\Users\\tam2\\Dropbox\\ctr\\MainBibFile.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,message=FALSE,warning=FALSE,echo=FALSE}
+library(readxl)
+library(tidyverse)
+library(knitr)
+#for the mixture models
+library(mixtools)
+library(ggplot2)
+library(ggpubr)
+# For robust fitting of mixtures of Gamma's
+library(moveHMM)
+```
+
+# Introduction
+
+This file is a supplement to the paper "Estimating cue rates for animals with silence-bout sound patterns" by Tiago A. Marques, Sónia Coelho and Ana I. Leal. Details about the methods are presented in the main document for the paper.
+
+If this file is compiled first, it will as a final side effect to save an R workspace, which can then be loaded upfront on the manuscript file to recreate all the figures and statistics reported on the paper.
+
+Here we read the data from the focal follows
+
+```{r,readdata,echo=FALSE}
+#read the data from the focal follows
+cantos <- read_excel("data/dados_cantos.xlsx")
+```
+
+The times of calls are recorded as the fraction of the day since the beginning of the day, at midnight, so we recode these fractions of the day to represent seconds.
+
+```{r}
+#recode inter-event-intervals (iei) to be in seconds 
+cantos$iei<-cantos$iei*((24*60*60))
+```
+
+We pre-process the data to get which of the events are inter-sound-intervals. Most of those records for which `Event=call` correspond indeed to $isi$'s, but the notable exception are:
+
+-   those which end with a `call`, which will have no `iei`, and
+-   those for focal follows not initiated at a sound, labelled as `Event=rec.start`. For these, the first `iei` corresponds to a time between the start of the focal follow and the first call produced, and hence must be removed for when modelling $isi$'s.
+
+To account for both of these we create a new column labelled `isi` with an indicator that takes the value 1 is the `iei` corresponds to an `isi`, and 0 otherwise. Only those $iei$ with `isi=TRUE` will be considered for modelling the $isi$ components
+
+```{r}
+cantos$isi<-1
+#removing iei's that are not isi's
+#those not calls are not isi's
+cantos$isi[cantos$Event!="call"]<-0
+#those that are calls but the end of the ofcal follow is with a call are 0 (these always happen with iei=NA)
+cantos$isi[is.na(cantos$iei)]<-0
+#those for focal follows not initiated at a sound, labelled as `Event=rec.start`
+cantos$isi[which(cantos$Event=="rec.start")+1]<-0
+```
+
+summaries by bird:
+
+```{r}
+#compute cue rates per animal etc
+#cr is cue rate per minute
+# sounds: number of sounds produced
+# n: number of records, at most "sounds"+2 (if sac=0 and eac=0), at least "sounds" (if sac=1 and eac=1)
+# start1: recording start and first sound if sac=1
+# start2: the first sound if sac=0
+# end1: recording end and last sound if eac=1
+# end2: the last sound if eac=0
+# dur1: the "standard" duration as in end time minus start time (in minutes)
+# cr1: the conventional cue rate, number of sounds / duration
+# sac: the indicator of whether recording started with a sound
+# eac: the indicator of whether recording ended with a sound
+crs.by.indiv<-cantos %>% group_by(Indiv) %>% summarise(sounds=sum(Event=="call"),n = n(),start1=min(Time),start2=Time[2],end1=max(Time),end2=sort(Time,decreasing =TRUE)[2],dur1=25*60*(end1-start1),cr1=sounds/dur1,sac=sac[1],eac=eac[1])
+#adding dur2: the duration from the first to the last sound produced, in minutes
+#this will be required for our suggested estimator
+start<-with(crs.by.indiv,ifelse(sac==1,start1,start2))
+end<-with(crs.by.indiv,ifelse(eac==1,end1,end2))
+crs.by.indiv$dur2<-25*60*(end-start)
+```
+
+```{r}
+#the isi times
+st <- cantos %>% drop_na("isi")
+```
+
+We have a total of `r sum(cantos$isi==1)` times of sound production obtained from focal follows of `r length(unique(cantos$Indiv))` individuals.
+
+Individuals were followed on average for `r round(mean(crs.by.indiv$dur1),2)` minutes, ranging from `r round(min(crs.by.indiv$dur1),2)` to `r round(max(crs.by.indiv$dur1),2)` minutes. The distribution of these focal follow times is shown below:
+
+```{r}
+ggplot(crs.by.indiv,aes(x=1,y=dur1),fill="lightblue")+
+  theme_bw()+geom_violin(fill="lightblue")+geom_jitter()+geom_hline(yintercept=mean(crs.by.indiv$dur1))
+```
+
+We can take a look at the data.
+
+```{r}
+ggplot(cantos, aes(x=iei)) + geom_histogram() + xlab("Inter-event-intervals (s)")
+#hist(cantos$iei, breaks = 20, main="", xlab="Inter-event-intervals (s)")
+```
+
+Only `r sum(cantos$iei[cantos$isi==1]>60)` of the $isi$'s, corresponding to `r round(sum(cantos$iei[cantos$isi==1]>60)/sum(cantos$isi),2)` % of the $isi$'s, are longer than 1 minute. Below we focus the attention on those `isi` that are under a minute below:
+
+```{r}
+#hist truncated for iei <60s
+ggplot(cantos[(cantos$isi==1 & cantos$iei<60),], aes(x=iei)) + geom_histogram() + xlab("Inter-event-intervals (s), truncated at 60 seconds")
+#hist(cantos$iei[(cantos$isi==1 & cantos$iei<60),], main="", xlab="Inter-event-intervals (s), truncated at 60 seconds") 
+```
+
+The per animal cue rates are shown below:
+
+```{r}
+ggplot(crs.by.indiv,aes(x=1,y=cr1),fill="lightblue")+
+  theme_bw()+geom_violin(fill="lightblue")+geom_jitter()+geom_hline(yintercept=mean(crs.by.indiv$cr1))
+```
+
+```{r}
+ci.cr1<-t.test(crs.by.indiv$cr1)$conf.int
+cv.cr1<-100*(sd(crs.by.indiv$cr1)/sqrt(nrow(crs.by.indiv)))/mean(crs.by.indiv$cr1)
+```
+
+The corresponding estimate of the average cue rate, estimated using a standard mean, is `r round(mean(crs.by.indiv$cr1),2)`, with 95% CI of `r round( ci.cr1[1],2)`-`r round(ci.cr1[2],2)`. The coefficient of variation is `r round(cv.cr1,2)` %.
+
+Finally, we model the $isi$'s s a two-part mixture, as suggested above.
+
+## Considering Gaussian mixtures
+
+```{r}
+#the isi's to model and separate into two components, one for bbi's and one for wbi's
+isis<-cantos$iei[cantos$isi==1]
+indivs<- cantos$Indiv[cantos$isi==1]
+mixmdl = normalmixEM(isis,k=2)
+#was checking the inclusion of a 3rd component - weirdly AIC seems to favour that
+#mixmdl3 = normalmixEM(isis,k=3)
+```
+
+We can see what this two mixture distribution corresponds to:
+
+```{r}
+plot(mixmdl,which=2,breaks=seq(0,500,by=10))         
+lines(density(isis), lty=2, lwd=2)
+```
+
+And a summary of the fitted two part mixture
+
+```{r}
+kable(summary(mixmdl))
+```
+
+```{r}
+p.mix<-mixmdl$lambda
+means.mix<-mixmdl$mu
+sds.mix<-mixmdl$sigma
+
+```
+
+Note this implies that the mean value of the first component, corresponding to the $wbi$, is `r round(means.mix[1],2)` seconds, with a standard error of `r round(sds.mix[1],2)`, and we estimate that `r round(p.mix[1],2)` of the observations come from the $wbi$'s, while the mean value of the second component, corresponding to the $bbi$, is `r round(means.mix[2],2)` seconds, with a standard error of `r round(sds.mix[2],2)`, and we estimate that `r round(p.mix[2],2)` of the observations come from the $wbi$'s. Actually, this means that for each $bbi$ we have 0.85/0.15=`r round(p.mix[1]/p.mix[2])` $wbi$'s, or in other words, each call bout contains on average `r round(p.mix[1]/p.mix[2])` calls.
+
+```{r}
+crs.by.indiv$dur3<-with(crs.by.indiv,dur2+(means.mix[2]/60))
+crs.by.indiv$cr2<-with(crs.by.indiv,sounds/dur3)
+```
+
+```{r}
+cr.new<-mean(crs.by.indiv$cr2)
+ci.cr2<-t.test(crs.by.indiv$cr2)$conf.int
+cv.cr2<-100*(sd(crs.by.indiv$cr2)/sqrt(nrow(crs.by.indiv)))/mean(crs.by.indiv$cr2)
+```
+
+This would then lead to an estimate of cue rate of `r round(cr.new,2)`, with 95% CI of `r round( ci.cr2[1],2)`-`r round(ci.cr2[2],2)`. The coefficient of variation is `r round(cv.cr2,2)` %.
+
+The confidence interval above does not propagate the uncertainty in estimating the mean of the $bbi$'s. To do so we incorporate a non-parametric bootstrap procedure, resampling the birds subjected to focal follows.
+
+```{r,warning=FALSE,message=FALSE,cache=TRUE,echo=TRUE,include=FALSE}
+B<-999
+cr.new.boot<-numeric(B)
+bbis.boot<-numeric(B)
+nsounds.boot<-numeric(B)
+bird.codes<-unique(cantos$Indiv)
+nbirds<-length(bird.codes)
+for(i in 1:B){
+  #select a sample of birds
+  birds.boot<-sample(bird.codes,size = nbirds,replace = TRUE)
+  #select the first bird data
+  cantos.boot<-cantos[cantos$Indiv==birds.boot[1],]
+  crs.by.indiv.boot<-crs.by.indiv[crs.by.indiv$Indiv==birds.boot[1],]
+  for(j in 2:nbirds){
+    #select all the remaining birds data
+    cantos.boot<-rbind(cantos.boot,cantos[cantos$Indiv==birds.boot[j],])
+    crs.by.indiv.boot<-rbind(crs.by.indiv.boot,crs.by.indiv[crs.by.indiv$Indiv==birds.boot[j],])
+  }
+  # fit the 2/component mixture model
+  isis.boot<-cantos.boot$iei[cantos.boot$isi==1]
+  mixmdl.boot <- normalmixEM(isis.boot,k=2,verb = FALSE)
+  #note the use of max as sometimes the mixture reverses the means
+  #i.e about 5% of the time the first mixture is the one with the higher mean
+  bbis.boot[i] <- max(mixmdl.boot$mu)
+  #mixmdl.boot$mu
+  # get the durations
+  crs.by.indiv.boot$dur3<-with(crs.by.indiv.boot,dur2+(bbis.boot[i]/60))
+  # get the cue rates
+  nsounds.boot[i]<-sum(crs.by.indiv.boot$sounds)
+  crs.by.indiv.boot$cr2<-with(crs.by.indiv.boot,sounds/dur3)
+  # get the mean cue rate
+  cr.new.boot[i]<-mean(crs.by.indiv.boot$cr2)
+}
+quants<-quantile(cr.new.boot,probs = c(0.025,0.975))
+#quants
+#summary(bbis.boot)
+#summary(nsounds.boot)
+```
+
+This leads to a point estimate of `r round(cr.new,2)` with corresponding 95% CV of `r round(quants[1],2)`-`r round(quants[2],2)`. This corresponds to a CV of `r round(100*sd(cr.new.boot)/cr.new,2)`.
+
+Unfortunately, late in the game, we noticed that Gaussian mixtures are not sensible, because they assign considerable density to inadmissible values for cue rates, i.e. negative values for a quantity which must be strictly non-negative.
+
+```{r}
+par(mfrow=c(1,2))
+xs<-seq(0,20,length=500)
+plot(xs,dnorm(xs,mean=mixmdl$mu[1],sd=mixmdl$sigma[1]),type="l",xlab="First component (wbi's)",ylab="f(x)")
+xseqs<-seq(0,200,by=0.1)
+plot(xs,dnorm(xs,mean=mixmdl$mu[2],sd=mixmdl$sigma[2]),type="l",xlab="Second component (bbi's)",ylab="f(x)")
+```
+
+Unfortunately, implementations of Gamma mixtures, which might be perhaps a more sensible strictly non-negative distribution, do not converge using `mixtools::gammamixEM`
+
+```{r,achO=TRUE,eval=FALSE}
+#try gamma mixture
+mixmdlGamma = gammamixEM(isis,k=2,lambda=mixmdl$lambda,alpha=mixmdl$mu,beta=1/mixmdl$mu)
+```
+
+Hence, we investigated other, creative, ways of fitting such Gamma mixtures.
+
+## Considering Gamma mixtures
+
+The way we decided to fit the Gamma mixture involved realizing that the times between songs could be seen as the conceptual equivalent of coordinates in a conceptual displacement of individuals.
+
+Models to fit animal movement data considering a step-length and turning-angle formulation are routinely used to fit Gamma mixtures to the step length distributions, where different distributions are conditional on the behavioural state the animals is in. Examples include R packages `momentuHMM` (@McClintock2018) and `moveHMM` (@Michelot2016). 
+
+Here we use the latter to fit a Gamma mixture with two states, equivalent to the $wbi$'s and the $bbi$'s. To do so, we simply have to re-shape our data to look like what `moveHMM` would expect for animal coordinates from movement data. These include the ($x$,$y$)coordinates of what would have been the successive locations of individuals. In particular, that means defining a series of step lengths where all animals are considered to start at position (0,0), and then move straight up north (without loss of generality, but that means we can keep the $x$ coordinate constant and just change the $y$ coordinate according to the song times of each bird), with each new "location" y coordinate corresponding to the time of the next sound detection.
+
+We first reshape the data accordingly.
+
+```{r}
+preMyData4MoveData <- data.frame(ID=indivs,x=0,y=isis)
+# Adding the 0,0 coordinate to represent the start, since the first observed time already corresponds to a first "step"
+# which would otherwise be ignored
+MyData4MoveData<-data.frame(ID=integer(),x=integer(),y=integer())
+for(i in 1:max(preMyData4MoveData$ID)){
+  #select the current ID
+  #set it's "initial location" at 0,0
+  row1temp<-data.frame(ID=i,x=0,y=0)
+  temp <- preMyData4MoveData[preMyData4MoveData$ID==i,]
+  temp <- rbind(row1temp,temp)
+  #transform the isi into a proper new coordinate, form which prepData can compute the correct step length
+  temp$y=cumsum(temp$y)
+  MyData4MoveData<-rbind(MyData4MoveData,temp)
+}
+#MyMoveData <- moveData(MyData4MoveData)
+MyMoveData <- prepData(MyData4MoveData,type="UTM")
+```
+
+Then we fit the model using `moveHMM::fitHMM` 
+
+```{r}
+fitGamma1<-fitHMM(MyMoveData,
+  nbStates=2,
+  stepPar0=c(2,2,3,3),
+  anglePar0 = NULL,
+  beta0 = NULL,
+  delta0 = NULL,
+  formula = ~1,
+  stepDist = "gamma",
+  angleDist = "none")
+```
+
+We can now take a look at the results
+
+```{r}
+fitGamma1
+```
+
+and describe the distribution of the corresponding Gamma for each state, which naturally by construction no longer included density mass at negative values.
+
+```{r}
+par(mfrow=c(1,2))
+xseqs<-seq(0,20,by=0.1)
+plot(xseqs,dgamma(xseqs,shape=fitGamma1$mle$stepPar[1,2]^2/fitGamma1$mle$stepPar[2,2]^2,scale=fitGamma1$mle$stepPar[2,2]^2/fitGamma1$mle$stepPar[1,2]),type="l",ylab="f(x)",xlab="Second component (wbi's)")
+xseqs<-seq(0,200,by=0.1)
+plot(xseqs,dgamma(xseqs,shape=fitGamma1$mle$stepPar[1,1]^2/fitGamma1$mle$stepPar[2,1]^2,scale=fitGamma1$mle$stepPar[2,1]^2/fitGamma1$mle$stepPar[1,1]),type="l",xlim=c(0,150),ylab="f(x)",xlab="Second component (bbi's)")
+```
+
+Based on this the mean of the $bbi$'s is `r round(fitGamma1$mle$stepPar[1,1],2)` with a standard deviation of `r round(fitGamma1$mle$stepPar[2,1],2)` while the mean of the $wbi$'s is `r round(fitGamma1$mle$stepPar[1,2],2)` with a standard deviation of `r round(fitGamma1$mle$stepPar[2,2],2)`. Just as before, we can now estimate the corresponding cue rate
+
+```{r}
+crs.by.indiv$dur3G<-with(crs.by.indiv,dur2+(fitGamma1$mle$stepPar[1,1]/60))
+crs.by.indiv$cr2G<-with(crs.by.indiv,sounds/dur3G)
+```
+
+```{r}
+cr.newG<-mean(crs.by.indiv$cr2G)
+ci.cr2G<-t.test(crs.by.indiv$cr2G)$conf.int
+cv.cr2G<-100*(sd(crs.by.indiv$cr2G)/sqrt(nrow(crs.by.indiv)))/mean(crs.by.indiv$cr2G)
+```
+
+This would then lead to an estimate of cue rate of `r round(cr.newG,2)`, with 95% CI of `r round( ci.cr2G[1],2)`-`r round(ci.cr2G[2],2)`. The coefficient of variation is `r round(cv.cr2G,2)` %. This confidence interval does not propagate the uncertainty in estimating the mean of the $bbi$'s. To do so we incorporate a non-parametric bootstrap procedure, resampling the birds subjected to focal follows.
+
+```{r,warning=FALSE,message=FALSE,cache=TRUE,echo=TRUE,include=FALSE}
+set.seed(1234)
+B<-999
+cr.new.bootG<-numeric(B)
+bbis.bootG<-numeric(B)
+nsounds.bootG<-numeric(B)
+bird.codes<-unique(cantos$Indiv)
+nbirds<-length(bird.codes)
+for(i in 1:B){
+  #select a sample of birds
+  birds.boot<-sample(bird.codes,size = nbirds,replace = TRUE)
+  # the next line bit of code will be cryptic at best, confusing at worse
+  # as it has no consequence at all, the order of the birds in the sample does not change the result
+  # except for the fact that it prevents a bug in function prepData
+  # which would otherwise be triggered if by chance alone
+  # the bird with original ID 12, with only 2 isi's
+  # would be the first to be selected in the bootstrap sample
+  # if Théo Michelot wants to trigger the bug
+  # just comment the line below and the code will break after a few bootstrap runs
+  birds.boot<-sort(birds.boot,decreasing=TRUE)
+  #select the first bird data
+  cantos.boot<-cantos[cantos$Indiv==birds.boot[1],]
+  cantos.boot$Indiv<-1
+  crs.by.indiv.boot<-crs.by.indiv[crs.by.indiv$Indiv==birds.boot[1],]
+  for(j in 2:nbirds){
+    #select all the remaining birds data
+    curr.bird.boot <- cantos[cantos$Indiv==birds.boot[j],]
+    curr.bird.boot$Indiv <- j
+    cantos.boot<-rbind(cantos.boot,curr.bird.boot)
+    crs.by.indiv.boot<-rbind(crs.by.indiv.boot,crs.by.indiv[crs.by.indiv$Indiv==birds.boot[j],])
+  }
+  # fit the 2/component Gamma mixture model
+  isis.boot<-cantos.boot$iei[cantos.boot$isi==1]
+  indivs.boot<- cantos.boot$Indiv[cantos.boot$isi==1]
+  #set up data for moveHMM
+  preMyData4MoveData.boot <- data.frame(ID=indivs.boot,x=0,y=isis.boot)
+  # Adding the 0,0 coordinate to represent the start, since the first observed time already corresponds to a first "step"
+  # which would otherwise be ignored
+  MyData4MoveData.boot<-data.frame(ID=integer(),x=integer(),y=integer())
+  for(m in 1:max(preMyData4MoveData.boot$ID)){
+  #select the current ID
+  #set it's "initial location" at 0,0
+  row1temp.boot<-data.frame(ID=m,x=0,y=0)
+  temp.boot <- preMyData4MoveData.boot[preMyData4MoveData.boot$ID==m,]
+  temp.boot <- rbind(row1temp.boot,temp.boot)
+  #transform the isi into a proper new coordinate, form which prepData can compute the correct step length
+  temp.boot$y=cumsum(temp.boot$y)
+  MyData4MoveData.boot<-rbind(MyData4MoveData.boot,temp.boot)
+  }
+  #MyMoveData <- moveData(MyData4MoveData)
+  MyMoveData.boot <- prepData(MyData4MoveData.boot,type="UTM")
+  
+  fitGamma1.boot<-fitHMM(MyMoveData.boot,
+  nbStates=2,
+  stepPar0=c(2,2,3,3),
+  anglePar0 = NULL,
+  beta0 = NULL,
+  delta0 = NULL,
+  formula = ~1,
+  stepDist = "gamma",
+  angleDist = "none")
+  #note the use of max as sometimes the mixture reverses the means
+  #i.e about 5% of the time the first mixture is the one with the higher mean
+  bbis.bootG[i] <- max(fitGamma1.boot$mle$stepPar[1,])
+  # get the durations
+  crs.by.indiv.boot$dur3G<-with(crs.by.indiv.boot,dur2+(bbis.boot[i]/60))
+  # get the cue rates
+  nsounds.bootG[i]<-sum(crs.by.indiv.boot$sounds)
+  crs.by.indiv.boot$cr2G<-with(crs.by.indiv.boot,sounds/dur3G)
+  # get the mean cue rate
+  cr.new.bootG[i]<-mean(crs.by.indiv.boot$cr2G)
+}
+quantsG<-quantile(cr.new.bootG,probs = c(0.025,0.975))
+#quants
+#summary(bbis.boot)
+#summary(nsounds.boot)
+```
+
+This leads to a point estimate of `r round(cr.newG,2)` with corresponding 95% CV of `r round(quantsG[1],2)`-`r round(quantsG[2],2)`. This corresponds to a CV of `r round(100*sd(cr.new.bootG)/cr.newG,2)`.
+
+### Pending question
+
+It would be nice to estimate the time spent in each state, in other words, the expected proportion of each component in this two-part mixture. I was expecting that to be obtained by some functions related to stationarity, like `stationary` or `predictStationary`, but both of these require covariate arguments (`coves` and `newData`, respectively) which my model does not include. What obvious thing am I missing?
+
+# Saving an object to frontload in the main paper document
+
+Here we save a workspace which contains all the object to derive results required to allow the paper main document to be compiled.
+
+```{r}
+save.image(file="results4paper.Rdata")
+```
+
+Sourcing this workspace `results4paper.Rdata` in `Marquesetal2023cuerate4birds.Rmd` allows to generate all the figures within the manuscript.
+
+# References
+
