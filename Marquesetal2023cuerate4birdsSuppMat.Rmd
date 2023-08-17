@@ -232,9 +232,9 @@ Unfortunately, late in the game, we noticed that Gaussian mixtures are not sensi
 ```{r}
 par(mfrow=c(1,2))
 xs<-seq(0,20,length=500)
-plot(xs,dnorm(xs,mean=mixmdl$mu[1],sd=mixmdl$sigma[1]),type="l",xlab="First component (wbi's)",ylab="f(x)")
-xseqs<-seq(0,200,by=0.1)
-plot(xs,dnorm(xs,mean=mixmdl$mu[2],sd=mixmdl$sigma[2]),type="l",xlab="Second component (bbi's)",ylab="f(x)")
+plot(xs,dnorm(xs,mean=mixmdl$mu[1],sd=mixmdl$sigma[1]),type="l",xlab="First component (wbi's)",ylab="f(x)",ylim=c(0,0.15))
+xs<-seq(0,200,length=500)
+plot(xs,dnorm(xs,mean=mixmdl$mu[2],sd=mixmdl$sigma[2]),type="l",xlab="Second component (bbi's)",ylab="f(x)",ylim=c(0,0.007))
 ```
 
 Unfortunately, implementations of Gamma mixtures, which might be perhaps a more sensible strictly non-negative distribution, do not converge using `mixtools::gammamixEM`
@@ -400,9 +400,23 @@ quantsG<-quantile(cr.new.bootG,probs = c(0.025,0.975))
 
 This leads to a point estimate of `r round(cr.newG,2)` with corresponding 95% CV of `r round(quantsG[1],2)`-`r round(quantsG[2],2)`. This corresponds to a CV of `r round(100*sd(cr.new.bootG)/cr.newG,2)`.
 
-### Pending question
+We can actually estimate the proportion of time spent on each state. Note here cannot be seen as time, because the HMM assumes time steps of the same unit length. We can think of it as how many $wbi$'s to $bbi$'s are produced, say.
 
-It would be nice to estimate the time spent in each state, in other words, the expected proportion of each component in this two-part mixture. I was expecting that to be obtained by some functions related to stationarity, like `stationary` or `predictStationary`, but both of these require covariate arguments (`coves` and `newData`, respectively) which my model does not include. What obvious thing am I missing?
+```{r}
+mystat<-stationary(fitGamma1,covs = data.frame(0)) 
+```
+
+It seems like for each $bbi$ there are `r mystat[1,2]/mystat[1,1]` about $wbi$'s produced, or in other words, that a song burst includes about `r 1+mystat[1,2]/mystat[1,1]` sounds.
+
+# About moveHMM beating mixtools
+
+even if we start mixtools at the MLE's from moveHMM, the code does not converge. Weird, very weird, but hey...
+
+```{r}
+#try gamma mixture
+ mixmdlGamma = gammamixEM(isis,k=2,lambda=mystat,alpha=fitGamma1$mle$stepPar[1,]^2/fitGamma1$mle$stepPar[2,]^2,beta=fitGamma1$mle$stepPar[2,]^2/fitGamma1$mle$stepPar[1,])
+```
+
 
 # Saving an object to frontload in the main paper document
 
