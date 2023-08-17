@@ -417,6 +417,20 @@ even if we start mixtools at the MLE's from moveHMM, the code does not converge.
  mixmdlGamma = gammamixEM(isis,k=2,lambda=mystat,alpha=fitGamma1$mle$stepPar[1,]^2/fitGamma1$mle$stepPar[2,]^2,beta=fitGamma1$mle$stepPar[2,]^2/fitGamma1$mle$stepPar[1,])
 ```
 
+# A bug for Théo?
+
+```{r,eval=FALSE}
+fitGammaBug<-fitHMM(MyMoveData,
+  nbStates=2,
+  stepPar0=c(2,2,3,3),
+  anglePar0 = NULL,
+  beta0 = NULL,
+  delta0 = NULL,
+  formula = ~ID,
+  stepDist = "gamma",
+  angleDist = "none")
+```
+
 
 # Saving an object to frontload in the main paper document
 
